@@ -1,0 +1,25 @@
+# configs/fruit_bruise.yaml
+project: fruit_bruise
+seed: 42
+data:
+  train_dir: data/fruit/train
+  val_dir: data/fruit/val
+  test_dir: data/fruit/test
+  classes: ["fresh","early_bruise","spoiled"]
+  img_size: 384
+  num_workers: 4
+train:
+  batch_size: 32
+  epochs: 25
+  lr: 0.0003
+  weight_decay: 0.01
+  early_stop_patience: 5
+model:
+  backbone: efficientnet_b0
+  pretrained: true
+  dropout: 0.2
+eval:
+  metrics: ["accuracy","f1_macro","confusion_matrix"]
+inference:
+  heatmap: true
+  threshold_unsure: 0.6

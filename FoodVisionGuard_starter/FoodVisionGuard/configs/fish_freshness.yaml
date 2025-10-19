@@ -1,0 +1,28 @@
+# configs/fish_freshness.yaml
+project: fish_freshness
+seed: 42
+data:
+  csv: data/fish/labels.csv   # columns: filepath, eye_label, gill_label, skin_label
+  img_root: data/fish/images
+  img_size: 384
+  num_workers: 4
+labels:
+  eye: ["fresh","not_fresh"]
+  gill: ["fresh","not_fresh"]
+  skin: ["fresh","not_fresh"]
+train:
+  batch_size: 24
+  epochs: 30
+  lr: 0.0003
+  weight_decay: 0.01
+  early_stop_patience: 6
+model:
+  backbone: efficientnet_b0
+  pretrained: true
+  dropout: 0.2
+eval:
+  metrics: ["f1_macro","auroc"]
+inference:
+  heatmap: true
+  weights: {eye: 0.34, gill: 0.33, skin: 0.33}
+  threshold_fresh: 0.6
