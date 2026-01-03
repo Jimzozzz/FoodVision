@@ -1,4 +1,4 @@
-﻿# app_streamlit.py — FoodVision Guard (Bread) · Minimal UI
+﻿# app_streamlit.py — FoodVision Guard (Bread) · Minimal UI (no Entropy card)
 
 import streamlit as st
 import torch, torch.nn as nn
@@ -10,46 +10,21 @@ from datetime import datetime
 # ---------- Page Config ----------
 st.set_page_config(page_title="FoodVision Guard — Bread", layout="wide")
 
-# ---------- Global Styles (Minimal, high contrast, no emoji) ----------
+# ---------- Global Styles ----------
 st.markdown("""
 <style>
-/* base */
-html, body, [class*="css"] {
-  font-family: ui-sans-serif, system-ui, -apple-system, Segoe UI, Roboto, 'Noto Sans Thai', sans-serif;
-  color: #0f172a;
-}
-:root { --bg:#ffffff; --muted:#f1f5f9; --border:#e2e8f0; --text:#0f172a; --sub:#475569; --accent:#0ea5e9; --success:#16a34a; --warn:#d97706; --danger:#dc2626; }
-.block-container { padding-top: 16px; padding-bottom: 24px; }
-
-/* topbar */
-.min-topbar {
-  display:flex; align-items:center; justify-content:space-between;
-  padding:14px 18px; background:var(--bg); border:1px solid var(--border);
-  border-radius:12px; margin-bottom:14px;
-}
-.min-title { font-size:20px; font-weight:600; letter-spacing:.2px; }
+html, body, [class*="css"] { font-family: ui-sans-serif, system-ui, -apple-system, Segoe UI, Roboto, 'Noto Sans Thai', sans-serif; color:#0f172a; }
+:root { --bg:#ffffff; --muted:#f1f5f9; --border:#e2e8f0; --sub:#475569; }
+.block-container { padding-top:16px; padding-bottom:24px; }
+.min-topbar { display:flex; align-items:center; justify-content:space-between; padding:14px 18px; background:var(--bg); border:1px solid var(--border); border-radius:12px; margin-bottom:14px; }
+.min-title { font-size:20px; font-weight:600; }
 .min-sub { color:var(--sub); font-size:14px; }
-
-/* cards */
-.card {
-  background: var(--bg);
-  border: 1px solid var(--border);
-  border-radius: 12px;
-  padding: 14px 16px;
-}
-.metric-row { display:grid; grid-template-columns: repeat(3,minmax(0,1fr)); gap: 10px; }
+.card { background:var(--bg); border:1px solid var(--border); border-radius:12px; padding:14px 16px; }
+.metric-row { display:grid; grid-template-columns: repeat(3,minmax(0,1fr)); gap:10px; } /* 3 กล่อง: ผลลัพธ์, ความมั่นใจ, เวลา */
 .metric { border:1px solid var(--border); border-radius:10px; padding:12px 12px; background:var(--muted); }
 .metric .k { font-size:20px; font-weight:700; }
 .metric .l { font-size:12px; color:var(--sub); }
-
-/* history */
-.thumb { border:1px solid var(--border); border-radius:10px; }
-
-/* streamlit chrome */
-#MainMenu { visibility: hidden; } footer { visibility: hidden; } header { visibility: hidden; }
-
-/* expander */
-.summary { font-weight:600; }
+#MainMenu, footer, header { visibility:hidden; }
 </style>
 """, unsafe_allow_html=True)
 
@@ -114,11 +89,23 @@ def load_model_and_tfm(weights_path: str, train_dir: str, img_size: int):
     return model, classes, cam_engine, tfm
 
 def preprocess(pil_img: Image.Image, tfm): return tfm(pil_img).unsqueeze(0).to(DEVICE)
-def softmax_np(logits: torch.Tensor): return torch.softmax(logits, dim=1)[0].detach().cpu().numpy()
+
+# --- Probabilities helpers ---
+def softmax(logits):  # raw softmax
+    return torch.softmax(logits, dim=1)[0].detach().cpu().numpy()
+
+def softmax_with_temp(logits, T: float = 1.0):  # temperature scaling
+    z = logits / max(T, 1e-6)
+    return torch.softmax(z, dim=1)[0].detach().cpu().numpy()
+
+def entropy_norm(p: np.ndarray):
+    eps = 1e-12
+    h = -np.sum(p * np.log(p + eps))
+    h_max = np.log(len(p))
+    return float(h / (h_max + eps))
 
 def overlay_cam(pil_img: Image.Image, cam: np.ndarray) -> Image.Image:
-    import numpy as _np
-    img = cv2.cvtColor(_np.array(pil_img), cv2.COLOR_RGB2BGR)
+    img = cv2.cvtColor(np.array(pil_img), cv2.COLOR_RGB2BGR)
     cam = cv2.resize(cam, (img.shape[1], img.shape[0]))
     heat = cv2.applyColorMap(np.uint8(255*cam), cv2.COLORMAP_JET)
     out = cv2.addWeighted(img, 0.55, heat, 0.45, 0)
@@ -128,27 +115,34 @@ def overlay_cam(pil_img: Image.Image, cam: np.ndarray) -> Image.Image:
 def probs_df(classes, probs):
     return pd.DataFrame({"class": classes, "probability": probs}).sort_values("probability", ascending=False)
 
-# ---------- Sidebar (clean text, no emoji) ----------
+def confidence_level(p_max: float, ent: float):
+    if p_max >= 0.90 and ent <= 0.15:
+        return "มั่นใจมาก"
+    elif p_max >= 0.70 and ent <= 0.35:
+        return "มั่นใจปานกลาง"
+    else:
+        return "ไม่แน่ใจ"
+
+# ---------- Sidebar ----------
 with st.sidebar:
     st.markdown("#### การตั้งค่า")
-    th = st.slider("เกณฑ์ไม่แน่ใจ (prob สูงสุด < TH → ไม่แน่ใจ)", 0.40, 0.90, THRESHOLD_DEFAULT, 0.01)
-    img_size = st.select_slider("ขนาดภาพนำเข้า", options=[320, 384, 448], value=IMG_SIZE_DEFAULT)
+    th = st.slider("เกณฑ์ความเชื่อมั่นขั้นต่ำ (Confidence Threshold)", 0.40, 0.90, THRESHOLD_DEFAULT, 0.01)
+    img_size = IMG_SIZE_DEFAULT  # ล็อกที่ 384
+    T = st.slider("Temperature (T)", 0.5, 3.0, 1.0, 0.1, help="T>1 ลดความพุ่งของค่า softmax; T<1 ทำให้พุ่งขึ้น")
     st.markdown("---")
     st.caption(f"อุปกรณ์: {DEVICE}")
     st.caption(f"น้ำหนักโมเดล: {WEIGHTS_PATH}")
-    st.caption("หมายเหตุ: หากเวลาในการประมวลผลสูง ให้ลดขนาดภาพเป็น 320")
 
 # ---------- Topbar ----------
 st.markdown("""
 <div class="min-topbar">
   <div class="min-title">FoodVision Guard — Bread</div>
-  <div class="min-sub">คัดกรองภาพขนมปัง: สะอาด / มีรา พร้อมแผนที่ความสนใจ (Grad-CAM)</div>
+  <div class="min-sub">คัดกรองภาพขนมปัง: สะอาด / มีรา พร้อม Grad-CAM และค่าความไม่แน่นอน</div>
 </div>
 """, unsafe_allow_html=True)
 
 # load model
 model, classes, cam_engine, tfm = load_model_and_tfm(WEIGHTS_PATH, TRAIN_DIR, img_size)
-
 if "history" not in st.session_state: st.session_state.history = []
 
 # ---------- Upload ----------
@@ -172,28 +166,49 @@ with right:
 def predict_one(file):
     img = Image.open(file).convert("RGB")
     x = preprocess(img, tfm)
-    t0 = time.time()
-    with torch.no_grad(): logits = model(x)
-    latency_ms = (time.time() - t0) * 1000.0
-    probs = softmax_np(logits)
-    pred_idx = int(np.argmax(probs)); pred_name = classes[pred_idx]
-    max_prob = float(np.max(probs))
 
-    if max_prob < th:
-        label, advice = "ไม่แน่ใจ", "แนะนำหลีกเลี่ยงการบริโภค และตรวจซ้ำด้วยสายตาหรือกลิ่น"
+    # inference
+    t0 = time.time()
+    with torch.no_grad():
+        logits = model(x)
+    latency_ms = (time.time() - t0) * 1000.0
+
+    # probs (raw & calibrated)
+    probs_raw = softmax(logits)
+    probs_cal = softmax_with_temp(logits, T=T)
+
+    pred_idx = int(np.argmax(probs_cal))
+    pred_name = classes[pred_idx]
+    p_max_raw = float(np.max(probs_raw))
+    p_max_cal = float(np.max(probs_cal))
+
+    # uncertainty (ใช้ภายใน ไม่โชว์การ์ด)
+    ent = entropy_norm(probs_cal)
+    level = confidence_level(p_max_cal, ent)
+
+    # decision
+    if p_max_cal < th:
+        label = "ไม่แน่ใจ"
+        advice = "แนะนำหลีกเลี่ยงการบริโภค และตรวจซ้ำด้วยสายตาหรือกลิ่น"
     else:
         label = "มีรา" if pred_name == "moldy" else "สะอาด"
         advice = "พบสัญญาณรา: แนะนำทิ้งทั้งก้อน" if pred_name == "moldy" else "ยังไม่พบสัญญาณรา: โปรดตรวจวันหมดอายุและกลิ่นประกอบ"
 
+    # Grad-CAM
     cam, _ = cam_engine(x, class_idx=pred_idx)
     img_cam = overlay_cam(img, cam)
 
+    # thumbnail
     thumb = img.copy(); thumb.thumbnail((240, 240))
     buf = io.BytesIO(); thumb.save(buf, format="JPEG", quality=85)
+
     return {
         "image": img, "img_cam": img_cam, "classes": classes,
-        "probs": probs, "label": label, "pred_name": pred_name,
-        "max_prob": max_prob, "latency_ms": latency_ms,
+        "probs_raw": probs_raw, "probs_cal": probs_cal,
+        "p_max_raw": p_max_raw, "p_max_cal": p_max_cal,
+        "entropy": ent, "level": level,
+        "label": label, "pred_name": pred_name,
+        "latency_ms": latency_ms,
         "advice": advice, "thumb": buf.getvalue(),
         "filename": getattr(file, "name", "uploaded.jpg")
     }
@@ -208,7 +223,7 @@ if uploaded:
             "time": datetime.now().strftime("%H:%M:%S"),
             "name": out["filename"],
             "label": out["label"],
-            "prob": out["max_prob"],
+            "prob": out["p_max_cal"],
             "lat": out["latency_ms"],
             "thumb": out["thumb"],
         })
@@ -218,27 +233,28 @@ if uploaded:
 
         with c1:
             st.image(out["image"], caption="ภาพที่อัปโหลด", use_container_width=True)
-            with st.expander("อธิบายการตัดสินใจ (Grad-CAM)"):
+            with st.expander("จุดที่เข้าข่าย (Grad-CAM)"):
                 st.image(out["img_cam"], caption="Grad-CAM", use_container_width=True)
 
         with c2:
             st.subheader("ผลการประเมิน")
             st.markdown('<div class="metric-row">', unsafe_allow_html=True)
+            # 3 metrics: ผลลัพธ์ / ความมั่นใจ / เวลา
             m1, m2, m3 = st.columns(3)
             m1.markdown(f"<div class='metric'><div class='l'>ผลลัพธ์</div><div class='k'>{out['label']}</div></div>", unsafe_allow_html=True)
-            m2.markdown(f"<div class='metric'><div class='l'>ความมั่นใจ</div><div class='k'>{out['max_prob']:.2f}</div></div>", unsafe_allow_html=True)
+            m2.markdown(f"<div class='metric'><div class='l'>ความมั่นใจ </div><div class='k'>{out['p_max_cal']:.2f}</div></div>", unsafe_allow_html=True)
             m3.markdown(f"<div class='metric'><div class='l'>เวลา</div><div class='k'>{out['latency_ms']:.0f} ms</div></div>", unsafe_allow_html=True)
             st.markdown('</div>', unsafe_allow_html=True)
 
-            st.caption("ความน่าจะเป็นรายคลาส")
-            df = probs_df(out["classes"], out["probs"])
+            # แสดง bar chart ความน่าจะเป็นรายคลาส (หลังปรับ T)
+            df = probs_df(out["classes"], out["probs_cal"])
             st.bar_chart(df.set_index("class"))
 
             st.info(out["advice"])
         st.markdown('</div>', unsafe_allow_html=True)
 
 # ---------- History ----------
-st.markdown("#### ประวัติการทำนาย")
+st.markdown("#### ประวัติรูป")
 if len(st.session_state.history) == 0:
     st.caption("อัปโหลดรูปเพื่อเริ่มบันทึกประวัติ")
 else:
