@@ -5,82 +5,43 @@ from torchvision import models, transforms
 from PIL import Image
 import numpy as np
 import time
+import cv2
 import io
 import pandas as pd
+from datetime import datetime
 
 # -------------------- Page config --------------------
 st.set_page_config(page_title="FoodVision Guard — Bread", layout="wide")
 
-# -------------------- CSS (Dark UI) --------------------
+# -------------------- CSS --------------------
 st.markdown("""
 <style>
-/* Global font + dark background */
 html, body, [class*="css"] {
   font-family: ui-sans-serif, system-ui, -apple-system, Segoe UI, Roboto, 'Noto Sans Thai', sans-serif;
+  color: #0f172a;
 }
-
-:root{
-  --bg:#0b1220;         /* page background */
-  --panel:#111827;      /* card background */
-  --muted:#0f172a;      /* muted panels */
-  --border:#263246;     /* border */
-  --text:#e5e7eb;       /* text */
-  --sub:#b6c0cf;        /* secondary text */
-  --accent:#60a5fa;     /* accent */
+:root { --bg:#ffffff; --muted:#f1f5f9; --border:#e2e8f0; --sub:#475569; }
+.block-container { padding-top: 16px; padding-bottom: 24px; }
+.card {
+  background: var(--bg);
+  border: 1px solid var(--border);
+  border-radius: 12px;
+  padding: 14px 16px;
 }
-
-/* Set Streamlit app background */
-.stApp {
-  background: radial-gradient(1200px 600px at 20% 0%, rgba(96,165,250,0.12), transparent 60%),
-              radial-gradient(900px 500px at 80% 10%, rgba(34,197,94,0.10), transparent 55%),
-              var(--bg);
-  color: var(--text);
-}
-
-.block-container { padding-top: 16px; padding-bottom: 24px; max-width: 1200px; }
-
-/* Hide Streamlit chrome */
+.metric { border:1px solid var(--border); border-radius:10px; padding:12px; background:var(--muted); }
 #MainMenu, footer, header { visibility: hidden; }
 
-/* Text colors */
-h1,h2,h3,h4,h5,h6, p, span, div, label { color: var(--text) !important; }
-small, .stCaption, .stMarkdown p { color: var(--sub) !important; }
-
-/* Card */
-.card {
-  background: var(--panel);
-  border: 1px solid var(--border);
-  border-radius: 14px;
-  padding: 16px 18px;
-  box-shadow: 0 10px 24px rgba(0,0,0,0.25);
+/* ✅ ทำให้ “กรอบหัวข้อ” พื้นขาว + ตัวหนังสือสีดำ (override ชัวร์) */
+.card.light{
+  background: #ffffff;
+  border: 1px solid #e2e8f0;
 }
-.card .title { font-size: 22px; font-weight: 800; letter-spacing: 0.2px; }
-.card .sub { margin-top: 6px; color: var(--sub) !important; font-size: 14px; }
-
-/* Metrics look */
-div[data-testid="stMetric"] {
-  background: var(--muted);
-  border: 1px solid var(--border);
-  border-radius: 12px;
-  padding: 10px 12px;
+.card.light, .card.light *{
+  color: #0f172a !important;
 }
-
-/* File uploader */
-div[data-testid="stFileUploader"] section {
-  background: var(--muted);
-  border: 1px dashed rgba(99,102,241,0.55);
-  border-radius: 14px;
+.card.light .sub{
+  color: #334155 !important;
 }
-div[data-testid="stFileUploader"] * { color: var(--text) !important; }
-
-/* Buttons */
-.stButton>button, .stDownloadButton>button {
-  border-radius: 12px;
-  border: 1px solid var(--border);
-}
-
-/* Selection highlight (ตอนลากเลือกข้อความ) */
-::selection { background: rgba(96,165,250,0.45); color: var(--text); }
 </style>
 """, unsafe_allow_html=True)
 
@@ -147,41 +108,25 @@ def load_model(img_size):
 
     return model, cam_engine, tfm
 
-def jet_colormap(x):
-    """x in [0,1] -> RGB heatmap (jet-like) without matplotlib/opencv"""
-    x = np.clip(x, 0.0, 1.0)
-    r = np.clip(1.5 - np.abs(4*x - 3), 0, 1)
-    g = np.clip(1.5 - np.abs(4*x - 2), 0, 1)
-    b = np.clip(1.5 - np.abs(4*x - 1), 0, 1)
-    return np.stack([r, g, b], axis=-1)
-
-def overlay_cam(img: Image.Image, cam: np.ndarray, alpha_img=0.55, alpha_heat=0.45):
-    """Overlay CAM on image using PIL+numpy (no cv2)."""
-    img_np = np.array(img).astype(np.float32) / 255.0
-    h, w = img_np.shape[:2]
-
-    cam_u8 = (np.clip(cam, 0, 1) * 255).astype(np.uint8)
-    cam_resized = Image.fromarray(cam_u8).resize((w, h), resample=Image.BILINEAR)
-    cam_resized = np.array(cam_resized).astype(np.float32) / 255.0
-
-    heat = jet_colormap(cam_resized)  # (h,w,3) float 0..1
-
-    out = alpha_img * img_np + alpha_heat * heat
-    out = np.clip(out, 0, 1)
-    return Image.fromarray((out * 255).astype(np.uint8))
+def overlay_cam(img, cam):
+    img_np = np.array(img)
+    cam = cv2.resize(cam, (img_np.shape[1], img_np.shape[0]))
+    heatmap = cv2.applyColorMap(np.uint8(255 * cam), cv2.COLORMAP_JET)
+    out = cv2.addWeighted(img_np, 0.55, heatmap, 0.45, 0)
+    return Image.fromarray(out)
 
 # -------------------- Sidebar --------------------
 with st.sidebar:
-    st.markdown("### ตั้งค่า")
     th = st.slider("เกณฑ์ไม่แน่ใจ", 0.40, 0.90, THRESHOLD_DEFAULT, 0.01)
     img_size = st.select_slider("ขนาดภาพ", [320, 384, 448], IMG_SIZE_DEFAULT)
     st.caption(f"Device: {DEVICE}")
 
-# -------------------- Header (fixed: no white hard-to-read box) --------------------
+# -------------------- Header --------------------
+# ✅ เปลี่ยนให้กรอบหัวข้อเป็นพื้นขาว + ตัวหนังสือดำ
 st.markdown("""
-<div class="card">
-  <div class="title">FoodVision Guard — Bread</div>
-  <div class="sub">คัดกรองขนมปังที่มีเชื้อราด้วย Deep Learning (EfficientNet-B0 + Grad-CAM)</div>
+<div class="card light">
+<b>FoodVision Guard — Bread</b><br>
+<span class="sub">คัดกรองขนมปังที่มีเชื้อราด้วย Deep Learning (EfficientNet-B0 + Grad-CAM)</span>
 </div>
 """, unsafe_allow_html=True)
 
@@ -189,7 +134,7 @@ st.markdown("""
 model, cam_engine, tfm = load_model(img_size)
 
 # -------------------- Upload --------------------
-uploaded = st.file_uploader("อัปโหลดภาพขนมปัง", type=["jpg", "png", "jpeg"])
+uploaded = st.file_uploader("อัปโหลดภาพขนมปัง", type=["jpg","png","jpeg"])
 
 if uploaded:
     img = Image.open(uploaded).convert("RGB")
@@ -203,7 +148,7 @@ if uploaded:
     probs = torch.softmax(logits, dim=1)[0].cpu().numpy()
     idx = int(np.argmax(probs))
     pred = CLASSES[idx]
-    conf = float(probs[idx])
+    conf = probs[idx]
 
     if conf < th:
         label = "ไม่แน่ใจ"
