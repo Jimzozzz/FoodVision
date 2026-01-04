@@ -125,8 +125,8 @@ with st.sidebar:
 # ✅ เปลี่ยนให้กรอบหัวข้อเป็นพื้นขาว + ตัวหนังสือดำ
 st.markdown("""
 <div class="card light">
-<b>FoodVision Guard — Bread</b><br>
-<span class="sub">คัดกรองขนมปังที่มีเชื้อราด้วย Deep Learning (EfficientNet-B0 + Grad-CAM)</span>
+<b>Bread Mold Detection System Using Deep Learning</b><br>
+<span class="sub">ระบบตรวจจับเชื้อราในขนมปังด้วย Deep Learning</span>
 </div>
 """, unsafe_allow_html=True)
 
@@ -174,4 +174,4 @@ if uploaded:
         df = pd.DataFrame({"Class": CLASSES, "Probability": probs})
         st.bar_chart(df.set_index("Class"))
 
-st.caption("⚠️ ใช้เพื่อคัดกรองเบื้องต้น ไม่ทดแทนการตรวจในห้องปฏิบัติการ")
+st.caption("⚠️ ใช้เพื่อคัดกรองเบื้องต้น ไม่สามารถทดแทนผลการตรวจจากห้องปฏิบัติการ")
