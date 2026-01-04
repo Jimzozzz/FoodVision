@@ -117,7 +117,7 @@ def overlay_cam(img, cam):
 
 # -------------------- Sidebar --------------------
 with st.sidebar:
-    th = st.slider("เกณฑ์ไม่แน่ใจ", 0.40, 0.90, THRESHOLD_DEFAULT, 0.01)
+    th = st.slider("Confidence Threshold", 0.40, 0.90, THRESHOLD_DEFAULT, 0.01)
     img_size = st.select_slider("ขนาดภาพ", [320, 384, 448], IMG_SIZE_DEFAULT)
     st.caption(f"Device: {DEVICE}")
 
